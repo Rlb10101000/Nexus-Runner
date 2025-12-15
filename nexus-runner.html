@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Nexus Runner - Cyber Platformer</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background: #000; touch-action: manipulation; font-family: 'Courier New', monospace; }
+        canvas { display: block; image-rendering: pixelated; }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            color: #00ffff;
+            z-index: 10;
+            text-shadow: 0 0 10px #00ffff;
+            font-size: 18px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 30px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+        .btn {
+            width: 85px;
+            height: 85px;
+            background: rgba(0, 255, 255, 0.2);
+            border: 2px solid #00ffff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: #00ffff;
+            box-shadow: 0 0 20px #00ffff;
+            user-select: none;
+        }
+        #dashBtn { background: rgba(255, 0, 255, 0.3); border-color: #ff00ff; box-shadow: 0 0 20px #ff00ff; color: #ff00ff; }
+        #score { font-size: 24px; }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            color: #00ffff;
+            padding: 30px;
+            border: 3px solid #00ffff;
+            border-radius: 15px;
+            text-align: center;
+            font-size: 28px;
+            display: none;
+            z-index: 20;
+            box-shadow: 0 0 30px #00ffff;
+        }
+        button {
+            margin-top: 20px;
+            padding: 12px 25px;
+            background: transparent;
+            color: #00ffff;
+            border: 2px solid #00ffff;
+            border-radius: 8px;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: 0 0 15px #00ffff;
+        }
+        button:hover { background: rgba(0, 255, 255, 0.1); }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div>Energy: <span id="score">0</span></div>
+        <div>Lives: <span id="lives">3</span></div>
+    </div>
+    <canvas id="game"></canvas>
+
+    <div id="controls">
+        <div class="btn" id="leftBtn">◄</div>
+        <div style="display: flex; gap: 20px;">
+            <div class="btn" id="jumpBtn">↑</div>
+            <div class="btn" id="dashBtn">⚡</div>
+        </div>
+        <div class="btn" id="rightBtn">►</div>
+    </div>
+
+    <div id="gameOver">
+        SYSTEM FAILURE<br><br>
+        Energy Core Depleted
+        <button onclick="location.reload()">REBOOT</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // Game constants
+        const GRAVITY = 0.7;
+        const JUMP_POWER = -15;
+        const DASH_POWER = 18;
+        const MOVE_SPEED = 6;
+
+        // Player
+        const player = {
+            x: 100, y: 200, width: 40, height: 60,
+            velX: 0, velY: 0, grounded: false, canDoubleJump: true,
+            facing: 1, dashing: false, dashTimer: 0, wallSliding: false,
+            trail: []
+        };
+
+        let cameraX = 0;
+        let score = 0, lives = 3;
+        const scoreEl = document.getElementById('score');
+        const livesEl = document.getElementById('lives');
+
+        // Platforms
+        const platforms = [
+            {x: 0, y: 450, w: 900, h: 150},
+            {x: 1000, y: 380, w: 400, h: 20},
+            {x: 1450, y: 300, w: 300, h: 20},
+            {x: 1850, y: 250, w: 350, h: 20},
+            {x: 2300, y: 350, w: 500, h: 20},
+            {x: 2900, y: 280, w: 400, h: 20},
+            {x: 3400, y: 400, w: 600, h: 20},
+            {x: 900, y: 450, w: 3100, h: 150}
+        ];
+
+        // Energy Orbs
+        let orbs = [
+            {x: 400, y: 350, collected: false},
+            {x: 800, y: 300, collected: false},
+            {x: 1200, y: 300, collected: false},
+            {x: 1600, y: 220, collected: false},
+            {x: 2000, y: 170, collected: false},
+            {x: 2500, y: 280, collected: false},
+            {x: 3000, y: 200, collected: false},
+            {x: 3600, y: 320, collected: false}
+        ];
+
+        // Drone Enemies
+        let drones = [
+            {x: 1300, y: 200, velX: 0, velY: 1, shootTimer: 0},
+            {x: 2100, y: 150, velX: 0, velY: -1.2, shootTimer: 60},
+            {x: 3000, y: 180, velX: 0, velY: 1.5, shootTimer: 30}
+        ];
+        let projectiles = [];
+
+        let keys = { left: false, right: false, jump: false, dash: false };
+
+        // Controls
+        document.getElementById('leftBtn').ontouchstart = e => { e.preventDefault(); keys.left = true; };
+        document.getElementById('leftBtn').ontouchend = e => { e.preventDefault(); keys.left = false; };
+        document.getElementById('rightBtn').ontouchstart = e => { e.preventDefault(); keys.right = true; };
+        document.getElementById('rightBtn').ontouchend = e => { e.preventDefault(); keys.right = false; };
+        document.getElementById('jumpBtn').ontouchstart = e => { e.preventDefault(); keys.jump = true; };
+        document.getElementById('dashBtn').ontouchstart = e => { e.preventDefault(); keys.dash = true; };
+
+        // Keyboard fallback
+        document.onkeydown = e => {
+            if (e.key === 'ArrowLeft') keys.left = true;
+            if (e.key === 'ArrowRight') keys.right = true;
+            if (e.key === ' ' || e.key === 'ArrowUp') keys.jump = true;
+            if (e.key === 'Shift') keys.dash = true;
+        };
+        document.onkeyup = e => {
+            if (e.key === 'ArrowLeft') keys.left = false;
+            if (e.key === 'ArrowRight') keys.right = false;
+            if (e.key === ' ' || e.key === 'ArrowUp') keys.jump = false;
+            if (e.key === 'Shift') keys.dash = false;
+        };
+
+        function collides(a, b) {
+            return a.x < b.x + b.w && a.x + a.width > b.x &&
+                   a.y < b.y + b.h && a.y + a.height > b.y;
+        }
+
+        function updatePlayer() {
+            // Movement
+            if (keys.left) { player.velX = -MOVE_SPEED; player.facing = -1; }
+            else if (keys.right) { player.velX = MOVE_SPEED; player.facing = 1; }
+            else player.velX *= 0.8;
+
+            // Dash
+            if (keys.dash && player.dashTimer <= 0) {
+                player.velX = player.facing * DASH_POWER;
+                player.dashing = true;
+                player.dashTimer = 15;
+                keys.dash = false;
+                player.trail = [];
+            }
+            if (player.dashTimer > 0) player.dashTimer--;
+
+            if (player.dashTimer <= 0) player.dashing = false;
+
+            // Jump & Double Jump
+            if (keys.jump) {
+                if (player.grounded) {
+                    player.velY = JUMP_POWER;
+                    player.canDoubleJump = true;
+                } else if (player.canDoubleJump) {
+                    player.velY = JUMP_POWER * 0.9;
+                    player.canDoubleJump = false;
+                }
+                keys.jump = false;
+            }
+
+            // Wall slide/jump
+            player.wallSliding = false;
+            if (!player.grounded && player.velY > 0) {
+                for (let p of platforms) {
+                    if (player.velX > 0 && collides({x: player.x + 5, y: player.y, width: player.width, height: player.height}, p)) {
+                        player.wallSliding = true;
+                        player.velY = 2;
+                        if (keys.jump) {
+                            player.velX = -10;
+                            player.velY = JUMP_POWER;
+                            keys.jump = false;
+                        }
+                    }
+                    if (player.velX < 0 && collides({x: player.x - 5, y: player.y, width: player.width, height: player.height}, p)) {
+                        player.wallSliding = true;
+                        player.velY = 2;
+                        if (keys.jump) {
+                            player.velX = 10;
+                            player.velY = JUMP_POWER;
+                            keys.jump = false;
+                        }
+                    }
+                }
+            }
+
+            player.velY += GRAVITY;
+            player.x += player.velX;
+            player.y += player.velY;
+
+            // Trail effect
+            if (player.dashing || Math.abs(player.velX) > 8) {
+                player.trail.push({x: player.x + player.width/2, y: player.y + player.height/2, age: 0});
+            }
+            player.trail = player.trail.filter(t => t.age < 15);
+            player.trail.forEach(t => t.age++);
+
+            player.grounded = false;
+            for (let p of platforms) {
+                if (collides(player, {x: p.x, y: p.y, w: p.w, h: p.h})) {
+                    if (player.velY > 0 && player.y < p.y) {
+                        player.y = p.y - player.height;
+                        player.velY = 0;
+                        player.grounded = true;
+                        player.canDoubleJump = true;
+                    }
+                }
+            }
+
+            if (player.y > canvas.height + 100) die();
+        }
+
+        function die() {
+            lives--;
+            livesEl.textContent = lives;
+            if (lives <= 0) {
+                document.getElementById('gameOver').style.display = 'block';
+            } else {
+                player.x = 100; player.y = 200;
+                player.velX = player.velY = 0;
+                cameraX = 0;
+            }
+        }
+
+        function update() {
+            updatePlayer();
+
+            // Drones
+            drones.forEach(d => {
+                d.y += d.velY;
+                if (d.y < 100 || d.y > 350) d.velY = -d.velY;
+                d.shootTimer++;
+                if (d.shootTimer > 120 && Math.abs(d.x - player.x) < 400) {
+                    projectiles.push({
+                        x: d.x, y: d.y + 20,
+                        velX: (player.x - d.x) / 50,
+                        velY: (player.y - d.y) / 50
+                    });
+                    d.shootTimer = 0;
+                }
+            });
+
+            // Projectiles
+            projectiles.forEach((p, i) => {
+                p.x += p.velX * 8;
+                p.y += p.velY * 8;
+                if (collides(player, {x: p.x - 10, y: p.y - 10, width: 20, height: 20})) {
+                    die();
+                    projectiles.splice(i, 1);
+                }
+                if (p.x < cameraX || p.x > cameraX + canvas.width + 100) projectiles.splice(i, 1);
+            });
+
+            // Orbs
+            orbs.forEach(orb => {
+                if (!orb.collected && collides(player, {x: orb.x, y: orb.y, width: 40, height: 40})) {
+                    orb.collected = true;
+                    score += 100;
+                    scoreEl.textContent = score;
+                }
+            });
+
+            cameraX = Math.max(0, player.x - canvas.width * 0.3);
+        }
+
+        function render() {
+            ctx.fillStyle = '#000011';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Neon grid background
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)';
+            ctx.lineWidth = 1;
+            for (let x = -cameraX % 100; x < canvas.width; x += 100) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+
+            ctx.save();
+            ctx.translate(-cameraX, 0);
+
+            // Platforms with neon edges
+            platforms.forEach(p => {
+                ctx.fillStyle = '#112233';
+                ctx.fillRect(p.x, p.y, p.w, p.h);
+                ctx.strokeStyle = '#00ffff';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(p.x, p.y, p.w, p.h);
+            });
+
+            // Energy Orbs
+            orbs.forEach(orb => {
+                if (!orb.collected) {
+                    ctx.fillStyle = '#00ff00';
+                    ctx.beginPath();
+                    ctx.arc(orb.x + 20, orb.y + 20, 18, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#00ffff';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            });
+
+            // Drones
+            drones.forEach(d => {
+                ctx.fillStyle = '#ff00ff';
+                ctx.fillRect(d.x, d.y, 50, 30);
+                ctx.fillStyle = '#00ffff';
+                ctx.fillRect(d.x + 10, d.y + 10, 30, 10);
+            });
+
+            // Projectiles
+            ctx.fillStyle = '#ffff00';
+            projectiles.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Player trail
+            player.trail.forEach((t, i) => {
+                ctx.fillStyle = `rgba(0, 255, 255, ${1 - t.age / 15})`;
+                ctx.fillRect(t.x - 10, t.y - 20, 20, 40);
+            });
+
+            // Player
+            ctx.fillStyle = player.dashing ? '#ff00ff' : '#00ffff';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(player.x + 10, player.y + 10, 20, 20); // visor
+            ctx.fillStyle = '#00ffff';
+            ctx.fillRect(player.x + 15, player.y + 15, 10, 10);
+
+            ctx.restore();
+        }
+
+        function loop() {
+            update();
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
+</html>
